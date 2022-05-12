@@ -69,7 +69,7 @@ sub new
 
 =item * $o->get_part_stock_detail($part, %opts) - Returns a stock detail structure
 
-$part, %opts: same as above.
+$part, %opts: same as has_stock().
 
 Returns a structure like this:
 
@@ -118,7 +118,7 @@ Returns a structure like this:
 sub get_part_stock_detail
 {
 	my ($self, $part, %opts) = @_;
-	
+
 	my $p = $self->query_part_detail($part);
 
 	return $self->_parse_part_stock($p, %opts);
@@ -138,6 +138,7 @@ $part: The model number of the part
 	mfg: The manufacturer name, in case multiple parts have the same model
 
 =cut
+
 sub has_stock
 {
 	my ($self, $part, %opts) = @_;
@@ -310,9 +311,15 @@ sub query_part_detail
 	));
 }
 
+our %_valid_filter_opts = ( map { $_ => 1 } (qw/currency max_moq min_qty max_price mfg seller/) );
 sub _parse_part_stock
 {
 	my ($self, $resp, %opts) = @_;
+
+	foreach my $o (keys %opts)
+	{
+		die "invalid filter option: '$o'" if (!$_valid_filter_opts{$o});
+	}
 
 	my @results;
 	foreach my $r (@{ $resp->{data}{search}{results} })
