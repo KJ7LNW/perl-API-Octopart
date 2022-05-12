@@ -61,6 +61,8 @@ sub new
 
 	$args{api_queries} = 0;
 
+	die "An Octopart API token is required." if (!$args{token});
+
 	return bless(\%args, $class);
 }
 
@@ -372,7 +374,7 @@ sub _parse_part_stock
 	my @ret;
 	foreach my $r (@results)
 	{
-		next if (defined($opts{mfg}) && $r->{mfg} ne $opts{mfg});
+		next if (defined($opts{mfg}) && $r->{mfg} !~ /$opts{mfg}/i);
 
 		foreach my $s (keys %{ $r->{sellers} })
 		{
@@ -380,7 +382,7 @@ sub _parse_part_stock
 				|| (defined($opts{min_qty}) && $r->{sellers}{$s}{stock} < $opts{min_qty})
 				|| (defined($opts{max_price}) && $r->{sellers}{$s}{moq_price} > $opts{max_price})
 				|| (defined($opts{max_moq}) && $r->{sellers}{$s}{moq} > $opts{max_moq}
-				|| defined($opts{seller}) && $s !~ /$opts{seller}/)
+				|| defined($opts{seller}) && $s !~ /$opts{seller}/i)
 			   )
 			{
 				delete $r->{sellers}{$s};
