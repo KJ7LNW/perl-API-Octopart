@@ -11,15 +11,17 @@ use Data::Dumper;
 
 =head1 NAME
 
-API::Octopart - Simple inteface for querying part status across vendors.
+API::Octopart - Simple inteface for querying part status across vendors at octopart.com.
 
 =head1 SYNOPSIS
 
-	my $o = Octopart->new(
-		token => (sub { my $t = `cat ~/.octopart/token`; chomp $t; return $t})->(),
+	my $o = API::Octopart->new(
+		token => 'abcdefg-your-octopart-token-here',
 		cache => "$ENV{HOME}/.octopart/cache",
 		ua_debug => 1,
 		);
+
+	# Query part stock:
 	my %opts = (
 		currency => 'USD',
 		max_moq => 100,
@@ -32,25 +34,37 @@ API::Octopart - Simple inteface for querying part status across vendors.
 
 =head1 METHODS
 
-=item * has_stock($part, %opts) - Returns true if in stock.
-
 =over 4
 
-$part: The model number of the part
+=item * $o = API::Octopart->new(%opts) - Returns new Octopart object.
 
-%opts: Optional filters:
+Object Options (%opt):
 
-	currency: The currency for which purchase is accepted (eg, USD)
-	max_moq: The maximum "Minimum Order Quantity" you are willing to accept.
-	min_qty: The minimum quantity that must be available
-	max_price: The max price you are willing to pay
-	mfg: The manufacturer name, in case multiple parts have the same model
+Your Octopart API token:
 
-=back 4
+		token => 'abcdefg-your-octopart-token-here',
 
-=item * get_part_stock_detail($part, %opts) - Returns a stock detail structure
+You could do something like this to read the token from a file:
 
-=over 4
+		token => (sub { my $t = `cat ~/.octopart/token`; chomp $t; return $t})->(),
+	
+An optional cache directory to minimize requests to Octopart:
+
+		cache => "$ENV{HOME}/.octopart/cache", ua_debug => 1,
+
+	
+=cut 
+
+sub new
+{
+	my ($class, %args) = @_;
+
+	return bless(\%args, $class);
+}
+
+
+=item * $o->get_part_stock_detail($part, %opts) - Returns a stock detail structure
+
 $part, %opts: same as above.
 
 Returns a structure like this:
@@ -88,13 +102,12 @@ Returns a structure like this:
                     'rohs'              => 'Compliant',
                     'tolerance'         => '1%',
                     'voltagerating_dc_' => '150V',
-                    'width'             => '1.25mm'
+                    'width'             => '1.25mm',
+		    ...
                 }
             },
             ...
         ]
-
-=back 4
 
 =cut
 
@@ -107,6 +120,20 @@ sub get_part_stock_detail
 	return $self->_parse_part_stock($p, %opts);
 }
 
+
+=item * $o->has_stock($part, %opts) - Returns true if in stock.
+
+$part: The model number of the part
+
+%opts: Optional filters. No defaults are specified, it will return all unless limited.
+
+	currency: The currency for which purchase is accepted (eg, USD)
+	max_moq: The maximum "Minimum Order Quantity" you are willing to accept.
+	min_qty: The minimum quantity that must be available
+	max_price: The max price you are willing to pay
+	mfg: The manufacturer name, in case multiple parts have the same model
+
+=cut
 sub has_stock
 {
 	my ($self, $part, %opts) = @_;
@@ -124,95 +151,12 @@ sub has_stock
 	return 0;
 }
 
-sub _parse_part_stock
-{
-	my ($self, $resp, %opts) = @_;
+=item * $o->octo_query($q) - Returns new Octopart object.
 
-	my @results;
-	foreach my $r (@{ $resp->{data}{search}{results} })
-	{
-		$r = $r->{part};
-		next if (!scalar(@{ $r->{specs} // [] }));
+Return the JSON response structure as a perl ARRAY/HASH given a query meeting Octopart's
+API specification.
 
-		my %part = (
-			mfg => $r->{manufacturer}{name},
-			specs => {
-				map { 
-					defined($_->{attribute}{shortname}) 
-						? ($_->{attribute}{shortname} => $_->{value} . "$_->{units}")
-						: (
-							$_->{units} 
-								? ($_->{units} => $_->{value})
-								: ($_->{value} => 'true')
-						)
-				} @{ $r->{specs} }
-			},
-		);
-
-		# Seller stock and MOQ pricing:
-		my %ss;
-		foreach my $s (@{ $r->{sellers} })
-		{
-			foreach my $o (@{ $s->{offers} })
-			{
-				$ss{$s->{company}{name}}{stock} = $o->{inventory_level};
-				foreach my $p (@{ $o->{prices} })
-				{
-					next if (defined($opts{currency}) && $p->{currency} ne $opts{currency});
-
-					my $moq = $p->{quantity};
-					my $price = $p->{price};
-
-					$ss{$s->{company}{name}}{price_tier}{$p->{quantity}} = $price;
-
-					# Find the minimum order quantity and the MOQ price:
-					if (!defined($ss{$s->{company}{name}}{moq}) ||
-						$ss{$s->{company}{name}}{moq} > $moq)
-					{
-						$ss{$s->{company}{name}}{moq} = $moq;
-						$ss{$s->{company}{name}}{moq_price} = $price;
-					}
-				}
-			}
-			
-		}
-
-		$part{sellers} = \%ss;
-
-		push @results, \%part;
-	}
-
-	# Delete sellers that do not meet the constraints and
-	# add matching results to @ret:
-	my @ret;
-	foreach my $r (@results)
-	{
-		next if (defined($opts{mfg}) && $r->{mfg} ne $opts{mfg});
-
-		foreach my $s (keys %{ $r->{sellers} })
-		{
-			if (!defined($r->{sellers}{$s}{price_tier})
-				|| (defined($opts{min_qty}) && $r->{sellers}{$s}{stock} < $opts{min_qty})
-				|| (defined($opts{max_price}) && $r->{sellers}{$s}{moq_price} > $opts{max_price})
-				|| (defined($opts{max_moq}) && $r->{sellers}{$s}{moq} > $opts{max_moq})
-			   )
-			{
-				delete $r->{sellers}{$s};
-			}
-		}
-
-		push @ret, $r;
-	}
-
-	return \@ret;
-}
-
-sub new
-{
-	my ($class, %args) = @_;
-
-	return bless(\%args, $class);
-}
+=cut
 
 sub octo_query
 {
@@ -294,6 +238,15 @@ sub octo_query
 	return from_json($content);
 }
 
+=item * $o->query_part_detail($part) - Returns new Octopart object.
+
+Return the JSON response structure as a perl ARRAY/HASH given a part search term
+shown as "$part".  This function calls $o->octo_query() with a query from Octopart's
+"Basic Example" so you can easily lookup a specific part number.  The has_stock()
+and get_part_stock_detail() methods use this query internally.
+
+=cut
+
 sub query_part_detail
 {
 	my ($self, $part) = @_;
@@ -339,5 +292,130 @@ sub query_part_detail
 		}
 	));
 }
+
+sub _parse_part_stock
+{
+	my ($self, $resp, %opts) = @_;
+
+	my @results;
+	foreach my $r (@{ $resp->{data}{search}{results} })
+	{
+		$r = $r->{part};
+		next if (!scalar(@{ $r->{specs} // [] }));
+
+		my %part = (
+			mfg => $r->{manufacturer}{name},
+			specs => {
+				# Try to map first by shortname, then by unit, then by value if
+				# the former are undefined:
+				map { 
+					defined($_->{attribute}{shortname}) 
+						? ($_->{attribute}{shortname} => $_->{value} . "$_->{units}")
+						: (
+							$_->{units} 
+								? ($_->{units} => $_->{value})
+								: ($_->{value} => 'true')
+						)
+				} @{ $r->{specs} }
+			},
+		);
+
+		# Seller stock and MOQ pricing:
+		my %ss;
+		foreach my $s (@{ $r->{sellers} })
+		{
+			foreach my $o (@{ $s->{offers} })
+			{
+				$ss{$s->{company}{name}}{stock} = $o->{inventory_level};
+				foreach my $p (@{ $o->{prices} })
+				{
+					next if (defined($opts{currency}) && $p->{currency} ne $opts{currency});
+
+					my $moq = $p->{quantity};
+					my $price = $p->{price};
+
+					$ss{$s->{company}{name}}{price_tier}{$p->{quantity}} = $price;
+
+					# Find the minimum order quantity and the MOQ price:
+					if (!defined($ss{$s->{company}{name}}{moq}) ||
+						$ss{$s->{company}{name}}{moq} > $moq)
+					{
+						$ss{$s->{company}{name}}{moq} = $moq;
+						$ss{$s->{company}{name}}{moq_price} = $price;
+					}
+				}
+			}
+		}
+
+		$part{sellers} = \%ss;
+
+		push @results, \%part;
+	}
+
+	# Delete sellers that do not meet the constraints and
+	# add matching results to @ret:
+	my @ret;
+	foreach my $r (@results)
+	{
+		next if (defined($opts{mfg}) && $r->{mfg} ne $opts{mfg});
+
+		foreach my $s (keys %{ $r->{sellers} })
+		{
+			if (!defined($r->{sellers}{$s}{price_tier})
+				|| (defined($opts{min_qty}) && $r->{sellers}{$s}{stock} < $opts{min_qty})
+				|| (defined($opts{max_price}) && $r->{sellers}{$s}{moq_price} > $opts{max_price})
+				|| (defined($opts{max_moq}) && $r->{sellers}{$s}{moq} > $opts{max_moq})
+			   )
+			{
+				delete $r->{sellers}{$s};
+			}
+		}
+
+		push @ret, $r;
+	}
+
+	return \@ret;
+}
+
+=back
+
+=head1 SEE ALSO
+
+L<https://octopart.com/>, L<https://octopart.com/api>
+
+=head1 ATTRIBUTION
+
+Octopart is a registered trademark and brand of Octopart, Inc.  All tradmarks,
+product names, logos, and brands are property of their respective owners and no
+grant or license is provided thereof.
+
+The copyright below applies to this software module; the copyright holder is
+unaffiliated with Octopart, Inc.
+
+=head1 AUTHOR
+
+Originally written at eWheeler, Inc. dba Linux Global by Eric Wheeler
+to facilitate optimization of RF matching components, but only for
+components that are available for purchase at electronic component
+vendors (of course!) L<https://youtu.be/xbdBjR4szjE>
+
+=head1 COPYRIGHT
+
+Copyright (C) 2022 eWheeler, Inc. dba Linux Global
+L<https://www.linuxglobal.com/>
+
+This module is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This module is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this module. If not, see <http://www.gnu.org/licenses/>.
+
+=cut
 
 1;
