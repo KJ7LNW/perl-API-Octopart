@@ -59,6 +59,8 @@ sub new
 {
 	my ($class, %args) = @_;
 
+	$args{api_queries} = 0;
+
 	return bless(\%args, $class);
 }
 
@@ -121,7 +123,7 @@ sub get_part_stock_detail
 }
 
 
-=item * $o->has_stock($part, %opts) - Returns true if in stock.
+=item * $o->has_stock($part, %opts) - Returns the number of items in stock
 
 $part: The model number of the part
 
@@ -140,15 +142,16 @@ sub has_stock
 
 	my $parts = $self->get_part_stock_detail($part, %opts);
 
+	my $stock = 0;
 	foreach my $p (@$parts)
 	{
-		if (scalar(keys(%{ $p->{sellers} })))
+		foreach my $s (values(%{ $p->{sellers} }))
 		{
-			return 1;
+			$stock += $s->{stock}
 		}
 	}
 
-	return 0;
+	return $stock;
 }
 
 =item * $o->octo_query($q) - Returns new Octopart object.
@@ -185,6 +188,8 @@ sub octo_query
 	else
 	{
 		my $ua = LWP::UserAgent->new( agent => 'mdf-perl/1.0',);
+
+		$self->{api_queries}++;
 
 		if ($self->{ua_debug})
 		{
@@ -238,6 +243,16 @@ sub octo_query
 	return from_json($content);
 }
 
+
+=item * $o->octo_query_count() - Return the number of API calls so far.
+=cut
+
+sub octo_query_count
+{
+	my $self = shift;
+	return $self->{api_queries};
+}
+
 =item * $o->query_part_detail($part) - Returns new Octopart object.
 
 Return the JSON response structure as a perl ARRAY/HASH given a part search term
@@ -272,7 +287,7 @@ sub query_part_detail
 			  }
 			}
 			# Brokers are non-authorized dealers. See: https://octopart.com/authorized
-			sellers(include_brokers: true) {
+			sellers(include_brokers: false) {
 			  company {
 			    name
 			  }
