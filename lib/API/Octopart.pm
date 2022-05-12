@@ -379,7 +379,8 @@ sub _parse_part_stock
 			if (!defined($r->{sellers}{$s}{price_tier})
 				|| (defined($opts{min_qty}) && $r->{sellers}{$s}{stock} < $opts{min_qty})
 				|| (defined($opts{max_price}) && $r->{sellers}{$s}{moq_price} > $opts{max_price})
-				|| (defined($opts{max_moq}) && $r->{sellers}{$s}{moq} > $opts{max_moq})
+				|| (defined($opts{max_moq}) && $r->{sellers}{$s}{moq} > $opts{max_moq}
+				|| defined($opts{seller}) && $s !~ /$opts{seller}/)
 			   )
 			{
 				delete $r->{sellers}{$s};
