@@ -66,6 +66,102 @@ sub new
 	return bless(\%args, $class);
 }
 
+=item * $o->has_stock($part, %opts) - Returns the number of items in stock
+
+$part: The model number of the part
+
+%opts: Optional filters. No defaults are specified, it will return all unless limited.
+
+=over 4
+
+=item * min_qty => <n>    - Minimum stock quantity, per seller.
+
+If a sellerhas fewer than min_qty parts in stock then the seller will be excluded.
+
+=item * max_moq => <n>    - Maximum "minimum order quantity"
+
+This is the max MOQ you will accept as being in
+stock.  For example, a 5000-part reel might be more
+than you want for prototyping so set this to 10 or
+100.
+
+=item * seller => <regex> - Seller's name (regular expression)
+
+This is a regular expression so something like
+'Mouser|Digi-key' is valid.
+
+=item * mfg => <regex>    - Manufacturer name (regular expression)
+
+Specifying the mfg name is useful if your part model
+number is similar to those of other manufacturers.
+
+=item * currency => <s>   - eg, 'USD' for US dollars
+
+Defaults to include all currencies
+
+=back
+
+=cut
+
+sub has_stock
+{
+	my ($self, $part, %opts) = @_;
+
+	my $parts = $self->get_part_stock_detail($part, %opts);
+
+	my $stock = 0;
+	foreach my $p (@$parts)
+	{
+		foreach my $s (values(%{ $p->{sellers} }))
+		{
+			$stock += $s->{stock}
+		}
+	}
+
+	return $stock;
+}
+
+
+=item * $o->get_part_stock($part, %opts) - Returns a simple stock structure
+
+$part, %opts: same as has_stock().
+
+Returns the following structure:
+
+	{
+          'Mouser' => {
+                        'moq_price' => '0.2',
+                        'moq' => 1,
+                        'stock' => 24071
+                      },
+          'Digi-Key' => {
+                          'moq_price' => '0.2',
+                          'moq' => 1,
+                          'stock' => 10000
+                        }
+        };
+
+=cut
+
+sub get_part_stock
+{
+	my ($self, $part, %opts) = @_;
+
+	my $results = $self->get_part_stock_detail($part, %opts);
+
+	my %ret;
+	foreach my $result (@$results)
+	{
+		my $sellers = $result->{sellers};
+		foreach my $s (keys %$sellers)
+		{
+			$ret{$s} = $sellers->{$s};
+			delete $ret{$s}->{price_tier};
+		}
+	}
+
+	return \%ret;
+}
 
 =item * $o->get_part_stock_detail($part, %opts) - Returns a stock detail structure
 
@@ -125,39 +221,7 @@ sub get_part_stock_detail
 }
 
 
-=item * $o->has_stock($part, %opts) - Returns the number of items in stock
-
-$part: The model number of the part
-
-%opts: Optional filters. No defaults are specified, it will return all unless limited.
-
-	currency: The currency for which purchase is accepted (eg, USD)
-	max_moq: The maximum "Minimum Order Quantity" you are willing to accept.
-	min_qty: The minimum quantity that must be available
-	max_price: The max price you are willing to pay
-	mfg: The manufacturer name, in case multiple parts have the same model
-
-=cut
-
-sub has_stock
-{
-	my ($self, $part, %opts) = @_;
-
-	my $parts = $self->get_part_stock_detail($part, %opts);
-
-	my $stock = 0;
-	foreach my $p (@$parts)
-	{
-		foreach my $s (values(%{ $p->{sellers} }))
-		{
-			$stock += $s->{stock}
-		}
-	}
-
-	return $stock;
-}
-
-=item * $o->octo_query($q) - Returns new Octopart object.
+=item * $o->octo_query($q) - Queries the Octopart API
 
 Return the JSON response structure as a perl ARRAY/HASH given a query meeting Octopart's
 API specification.
@@ -256,7 +320,7 @@ sub octo_query_count
 	return $self->{api_queries};
 }
 
-=item * $o->query_part_detail($part) - Returns new Octopart object.
+=item * $o->query_part_detail($part)
 
 Return the JSON response structure as a perl ARRAY/HASH given a part search term
 shown as "$part".  This function calls $o->octo_query() with a query from Octopart's
