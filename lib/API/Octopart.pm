@@ -18,6 +18,7 @@ API::Octopart - Simple inteface for querying part status across vendors at octop
 	my $o = API::Octopart->new(
 		token => 'abcdefg-your-octopart-token-here',
 		cache => "$ENV{HOME}/.octopart/cache",
+		include_specs => 1,
 		ua_debug => 1,
 		);
 
@@ -40,18 +41,27 @@ API::Octopart - Simple inteface for querying part status across vendors at octop
 
 Object Options (%opt):
 
-Your Octopart API token:
+=over 4
 
-		token => 'abcdefg-your-octopart-token-here',
+=item * token => 'abcdefg-your-octopart-token-here',
 
-You could do something like this to read the token from a file:
+This is your Octopart API token.  You could do something like this to read the token from a file:
 
-		token => (sub { my $t = `cat ~/.octopart/token`; chomp $t; return $t})->(),
-	
-An optional cache directory to minimize requests to Octopart:
+	token => (sub { my $t = `cat ~/.octopart/token`; chomp $t; return $t})->(),
 
-		cache => "$ENV{HOME}/.octopart/cache", ua_debug => 1,
+=item *	include_specs => 1
 
+If you have a PRO account then you can include product specs:
+
+=item *	cache => "$ENV{HOME}/.octopart/cache"
+
+An optional (but recommended) cache directory to minimize requests to Octopart:
+
+=item * ua_debug => 1
+
+User Agent debugging.  This is very verbose and provides API communication details.
+
+=back
 	
 =cut 
 
@@ -244,6 +254,10 @@ sub octo_query
 		system('mkdir', '-p', $self->{cache}) if (! -d $self->{cache});
 
 
+		if ($self->{ua_debug})
+		{
+			print STDERR "Reading from cache file: $hashfile\n";
+		}
 
 		if (open(my $in, $hashfile))
 		{
@@ -251,10 +265,14 @@ sub octo_query
 			$content = <$in>;
 			close($in);
 		}
+		else
+		{
+			die "$hashfile: $!";
+		}
 	}
 	else
 	{
-		my $ua = LWP::UserAgent->new( agent => 'mdf-perl/1.0',);
+		my $ua = LWP::UserAgent->new( agent => 'mdf-perl/1.0', keep_alive => 3);
 
 		$self->{api_queries}++;
 
@@ -263,8 +281,10 @@ sub octo_query
 			$ua->add_handler(
 			  "request_send",
 			  sub {
-			    my $msg = shift;              # HTTP::Message
-			    $msg->dump( maxlength => 0 ); # dump all/everything
+			    my $msg = shift;              # HTTP::Request
+			    print STDERR "SEND >> \n"
+				    . $msg->headers->as_string . "\n"
+				    . "\n";
 			    return;
 			  }
 			);
@@ -272,8 +292,11 @@ sub octo_query
 			$ua->add_handler(
 			  "response_done",
 			  sub {
-			    my $msg = shift;                # HTTP::Message
-			    $msg->dump( maxlength => 512 ); # dump max 512 bytes (default is 512)
+			    my $msg = shift;                # HTTP::Response
+			    print STDERR "RECV << \n"
+				    . $msg->headers->as_string . "\n"
+				    . $msg->status_line . "\n"
+				    . "\n";
 			    return;
 			  }
 			);
@@ -307,7 +330,24 @@ sub octo_query
 		}
 	}
 
-	return from_json($content);
+	my $j = from_json($content); 
+
+	if ($j->{errors})
+	{
+		my %errors;
+		foreach my $e (@{ $j->{errors} })
+		{
+			$errors{$e->{message}}++;
+		}
+		die "Octopart: " . join("\n", keys(\%errors)) . "\n";
+	}
+
+	if ($self->{ua_debug})
+	{
+		print Dumper $j;
+	}
+
+	return $j;
 }
 
 
@@ -333,6 +373,25 @@ sub query_part_detail
 {
 	my ($self, $part) = @_;
 
+	# Specs require a pro account:
+	my $specs = '';
+	if ($self->{include_specs})
+	{
+		$specs = q(
+				specs {
+				  units
+				  value
+				  display_value
+				  attribute {
+				    id
+				    name
+				    shortname
+				    group
+				  }
+				}
+			);
+	}
+
 	return $self->octo_query( qq(
 		query {
 		  search(q: "$part", limit: 3) {
@@ -342,17 +401,7 @@ sub query_part_detail
 			  name
 			}
 			mpn
-			specs {
-			  units
-			  value
-			  display_value
-			  attribute {
-			    id
-			    name
-			    shortname
-			    group
-			  }
-			}
+			$specs
 			# Brokers are non-authorized dealers. See: https://octopart.com/authorized
 			sellers(include_brokers: false) {
 			  company {
@@ -389,11 +438,13 @@ sub _parse_part_stock
 	foreach my $r (@{ $resp->{data}{search}{results} })
 	{
 		$r = $r->{part};
-		next if (!scalar(@{ $r->{specs} // [] }));
+		my %part;
 
-		my %part = (
-			mfg => $r->{manufacturer}{name},
-			specs => {
+		$part{mfg} = $r->{manufacturer}{name};
+
+		if (defined $r->{specs})
+		{
+			$part{specs} = {
 				# Try to map first by shortname, then by unit, then by value if
 				# the former are undefined:
 				map { 
@@ -406,7 +457,7 @@ sub _parse_part_stock
 						)
 				} @{ $r->{specs} }
 			},
-		);
+		}
 
 		# Seller stock and MOQ pricing:
 		my %ss;
