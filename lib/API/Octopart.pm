@@ -339,7 +339,7 @@ sub octo_query
 		{
 			$errors{$e->{message}}++;
 		}
-		die "Octopart: " . join("\n", keys(\%errors)) . "\n";
+		die "Octopart: " . join("\n", keys(%errors)) . "\n";
 	}
 
 	if ($self->{ua_debug})
