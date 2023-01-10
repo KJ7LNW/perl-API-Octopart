@@ -82,6 +82,10 @@ If you have a PRO account then you can include product specs:
 
 An optional (but recommended) cache directory to minimize requests to Octopart:
 
+=item *	cache_age => 3
+
+The cache age (in days) before re-querying octopart.  Defaults to 30 days.
+
 =item * ua_debug => 1
 
 User Agent debugging.  This is very verbose and provides API communication details.
@@ -95,6 +99,7 @@ sub new
 	my ($class, %args) = @_;
 
 	$args{api_queries} = 0;
+	$args{cache_age} //= 30;
 
 	die "An Octopart API token is required." if (!$args{token});
 
@@ -269,33 +274,39 @@ sub octo_query
 	my $part = shift;
 
 
-	my $content;
+	my ($content, $hashfile);
 
-	my $h = md5_hex($q);
-	my $hashfile = "$self->{cache}/$h.query";
-
-	if ($self->{cache} && -e $hashfile)
+	if ($self->{cache})
 	{
 		system('mkdir', '-p', $self->{cache}) if (! -d $self->{cache});
 
+		my $h = md5_hex($q);
 
-		if ($self->{ua_debug})
-		{
-			print STDERR "Reading from cache file: $hashfile\n";
-		}
+		$hashfile = "$self->{cache}/$h.query";
 
-		if (open(my $in, $hashfile))
+		# Load the cached version if older than cache_age days.
+		my $age_days = (-M $hashfile);
+		if (-e $hashfile && $age_days < $self->{cache_age})
 		{
-			local $/;
-			$content = <$in>;
-			close($in);
-		}
-		else
-		{
-			die "$hashfile: $!";
+			if ($self->{ua_debug})
+			{
+				print STDERR "Reading from cache file: $hashfile\n";
+			}
+
+			if (open(my $in, $hashfile))
+			{
+				local $/;
+				$content = <$in>;
+				close($in);
+			}
+			else
+			{
+				die "$hashfile: $!";
+			}
 		}
 	}
-	else
+
+	if (!$content)
 	{
 		my $ua = LWP::UserAgent->new( agent => 'mdf-perl/1.0', keep_alive => 3);
 
@@ -341,13 +352,13 @@ sub octo_query
 
 		my $response = $ua->request($req);
 
-		if (!$response->is_success) {
-			die $response->status_line;
-		}
-
 		$content = $response->decoded_content;
 
-		if ($self->{cache})
+		if (!$response->is_success) {
+			die $response->status_line . "\n$content";
+		}
+
+		if ($hashfile)
 		{
 			open(my $out, ">", $hashfile) or die "$hashfile: $!";
 			print $out $content;
