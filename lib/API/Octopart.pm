@@ -22,7 +22,7 @@
 #
 
 package API::Octopart;
-$VERSION = 1.001;
+$VERSION = 1.002;
 
 use 5.006;
 use strict;
